@@ -13,6 +13,8 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
@@ -24,30 +26,30 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Enable or update GitHub Pages source
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enable GitHub Pages from gh-pages branch
         run: |
-          API="https://api.github.com/repos/${GITHUB_REPOSITORY}/pages"
-          PAYLOAD='{"source":{"branch":"gh-pages","path":"/"}}'
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "${API}")
-          echo "Pages API status: HTTP ${STATUS}"
-          if [ "${STATUS}" = "404" ]; then
-            echo "Pages not enabled. Creating from gh-pages branch..."
-            curl -s -X POST \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "${API}" -d "${PAYLOAD}"
-            echo ""
+          echo "Checking Pages status for ${GITHUB_REPOSITORY}..."
+          STATUS=$(gh api repos/${GITHUB_REPOSITORY}/pages --jq '.source.branch' 2>/dev/null || echo "NOT_FOUND")
+          echo "Current Pages source branch: ${STATUS}"
+          if [ "${STATUS}" = "NOT_FOUND" ] || [ "${STATUS}" = "null" ] || [ -z "${STATUS}" ]; then
+            echo "Enabling Pages from gh-pages branch..."
+            gh api repos/${GITHUB_REPOSITORY}/pages \
+              --method POST \
+              -f "source[branch]=gh-pages" \
+              -f "source[path]=/" \
+              2>&1 || echo "POST failed (may already exist, trying PUT)"
+            gh api repos/${GITHUB_REPOSITORY}/pages \
+              --method PUT \
+              -f "source[branch]=gh-pages" \
+              -f "source[path]=/" \
+              2>&1 || true
           else
-            echo "Pages exists (HTTP ${STATUS}). Ensuring source = gh-pages branch..."
-            curl -s -X PUT \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "${API}" -d "${PAYLOAD}" || true
+            echo "Pages already configured. Ensuring source = gh-pages..."
+            gh api repos/${GITHUB_REPOSITORY}/pages \
+              --method PUT \
+              -f "source[branch]=gh-pages" \
+              -f "source[path]=/" \
+              2>&1 || true
           fi
 
       - name: Snapshot main into staging dir
@@ -55,34 +57,43 @@ jobs:
           mkdir -p /tmp/site
           rsync -a --exclude='.git' . /tmp/site/
           touch /tmp/site/.nojekyll
-          echo "Snapshot root:"
-          ls -la /tmp/site
-          echo "JS files:"
-          ls /tmp/site/js/
-          echo "CSS files:"
-          ls /tmp/site/css/
 
-      - name: Validate index.html exists
+      - name: Validate required files in snapshot
         run: |
-          if [ ! -f /tmp/site/index.html ]; then
-            echo "ERROR: index.html missing from snapshot!"
+          PASS=true
+          for f in index.html manifest.json sw.js css/main.css css/reader.css \
+                   js/app.js js/db.js js/library.js js/reader.js \
+                   js/tts.js js/translation.js js/plugins.js; do
+            if [ -f "/tmp/site/${f}" ]; then
+              echo "  OK  ${f}"
+            else
+              echo "  MISSING: ${f}"
+              PASS=false
+            fi
+          done
+          JS_COUNT=$(ls /tmp/site/js/*.js 2>/dev/null | wc -l)
+          echo "Total JS files: ${JS_COUNT}"
+          if [ "${PASS}" = "false" ]; then
+            echo "Validation failed!"
             exit 1
           fi
-          echo "OK: index.html present ($(wc -c < /tmp/site/index.html) bytes)"
-          echo "OK: $(ls /tmp/site/js/*.js | wc -l) JS files"
-          echo "OK: $(ls /tmp/site/css/*.css | wc -l) CSS files"
+          echo "All required files present. index.html size: $(wc -c < /tmp/site/index.html) bytes"
 
       - name: Publish snapshot to gh-pages branch
         run: |
           git fetch origin
           if git ls-remote --exit-code --heads origin gh-pages > /dev/null 2>&1; then
             git checkout -b gh-pages origin/gh-pages
+            echo "Checked out existing gh-pages branch"
           else
             git checkout --orphan gh-pages
             git rm -rf . 2>/dev/null || true
+            echo "Created new orphan gh-pages branch"
           fi
           rsync -a --delete /tmp/site/ .
           git add -A
+          echo "Git status:"
+          git status --short | head -20
           if git diff --staged --quiet; then
             echo "No changes to deploy"
           else
@@ -92,10 +103,14 @@ jobs:
             echo "Successfully deployed to gh-pages!"
           fi
 
-      - name: Print live URL
+      - name: Verify deployment
         run: |
-          OWNER=$(echo "${GITHUB_REPOSITORY}" | cut -d'/' -f1 | tr '[:upper:]' '[:lower:]')
-          REPO=$(echo "${GITHUB_REPOSITORY}" | cut -d'/' -f2 | tr '[:upper:]' '[:lower:]')
+          sleep 3
+          INFO=$(gh api repos/${GITHUB_REPOSITORY}/pages 2>/dev/null || echo "{}")
+          echo "Pages info: ${INFO}"
+          OWNER_LC=$(echo "${GITHUB_REPOSITORY}" | cut -d'/' -f1 | tr '[:upper:]' '[:lower:]')
+          REPO_LC=$(echo "${GITHUB_REPOSITORY}" | cut -d'/' -f2 | tr '[:upper:]' '[:lower:]')
           echo "============================="
-          echo "Live: https://${OWNER}.github.io/${REPO}/"
+          echo "Repo: https://github.com/${GITHUB_REPOSITORY}"
+          echo "Live URL: https://${OWNER_LC}.github.io/${REPO_LC}/"
           echo "============================="

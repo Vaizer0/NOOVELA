@@ -19,65 +19,70 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Configure git
+      - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Enable / update GitHub Pages source
+      - name: Enable or update GitHub Pages (gh-pages branch source)
         run: |
+          PAYLOAD='{"source":{"branch":"gh-pages","path":"/"}}'
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/pages")
-          echo "Pages API status: $STATUS"
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/pages")
+          echo "Current Pages API response: HTTP $STATUS"
           if [ "$STATUS" = "404" ]; then
-            echo "Creating Pages config (gh-pages branch)..."
-            curl -s -X POST \
+            echo "Pages not enabled yet. Creating now..."
+            RESULT=$(curl -s -w "\n%{http_code}" -X POST \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$GITHUB_REPOSITORY/pages" \
-              -d '{"source":{"branch":"gh-pages","path":"/'"'"'/'"'"'"}}'
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/pages" \
+              -d "$PAYLOAD")
+            echo "Create result: $RESULT"
           else
-            echo "Updating Pages config to gh-pages branch..."
+            echo "Pages exists. Ensuring source is gh-pages branch..."
             curl -s -X PUT \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$GITHUB_REPOSITORY/pages" \
-              -d '{"source":{"branch":"gh-pages","path":"/'"'"'/'"'"'"}}' || true
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/pages" \
+              -d "$PAYLOAD" || true
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build site snapshot
+      - name: Snapshot main into /tmp/site
         run: |
           mkdir -p /tmp/site
-          rsync -av --exclude='.git' . /tmp/site/
+          rsync -a --exclude='.git' . /tmp/site/
           touch /tmp/site/.nojekyll
+          echo "Files in snapshot:"
+          ls /tmp/site
 
-      - name: Push snapshot to gh-pages
+      - name: Publish snapshot to gh-pages branch
         run: |
           git fetch origin
-          if git show-ref --quiet refs/remotes/origin/gh-pages; then
+          if git ls-remote --exit-code --heads origin gh-pages > /dev/null 2>&1; then
             git checkout -b gh-pages origin/gh-pages
           else
             git checkout --orphan gh-pages
             git rm -rf . 2>/dev/null || true
           fi
-          rsync -av --delete /tmp/site/ .
+          rsync -a --delete /tmp/site/ .
           git add -A
           if git diff --staged --quiet; then
-            echo "Nothing changed — skipping commit"
+            echo "No changes to deploy"
           else
-            SHORT=$(git rev-parse --short origin/main 2>/dev/null || echo "$(date -u +%Y%m%d%H%M)")
-            git commit -m "deploy: $SHORT"
+            SHORTSHA=$(git rev-parse --short origin/main 2>/dev/null || date -u +%Y%m%d%H%M)
+            git commit -m "deploy: ${SHORTSHA}"
             git push origin gh-pages --force
-            echo "Deployed to gh-pages successfully"
+            echo "Successfully pushed to gh-pages"
           fi
 
-      - name: Report live URL
+      - name: Show live URL
         run: |
-          REPO_LC=$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
-          OWNER=$(echo "$REPO_LC" | cut -d'/' -f1)
-          REPO=$(echo "$REPO_LC" | cut -d'/' -f2)
-          echo "Live URL: https://${OWNER}.github.io/${REPO}/"
+          OWNER=$(echo "$GITHUB_REPOSITORY" | cut -d'/' -f1 | tr '[:upper:]' '[:lower:]')
+          REPO=$(echo "$GITHUB_REPOSITORY" | cut -d'/' -f2 | tr '[:upper:]' '[:lower:]')
+          echo "=============================="
+          echo "Site URL: https://${OWNER}.github.io/${REPO}/"
+          echo "=============================="

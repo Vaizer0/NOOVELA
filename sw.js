@@ -1,5 +1,5 @@
 'use strict';
-const CACHE_NAME='novela-v2';
+const CACHE_NAME='novela-v3';
 const PRECACHE=[
   './',
   './index.html',

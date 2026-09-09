@@ -28,89 +28,73 @@ jobs:
 
       - name: Enable GitHub Pages from gh-pages branch
         run: |
-          echo "Checking Pages status for ${GITHUB_REPOSITORY}..."
-          STATUS=$(gh api repos/${GITHUB_REPOSITORY}/pages --jq '.source.branch' 2>/dev/null || echo "NOT_FOUND")
-          echo "Current Pages source branch: ${STATUS}"
-          if [ "${STATUS}" = "NOT_FOUND" ] || [ "${STATUS}" = "null" ] || [ -z "${STATUS}" ]; then
-            echo "Enabling Pages from gh-pages branch..."
-            gh api repos/${GITHUB_REPOSITORY}/pages \
-              --method POST \
-              -f "source[branch]=gh-pages" \
-              -f "source[path]=/" \
-              2>&1 || echo "POST failed (may already exist, trying PUT)"
-            gh api repos/${GITHUB_REPOSITORY}/pages \
-              --method PUT \
-              -f "source[branch]=gh-pages" \
-              -f "source[path]=/" \
-              2>&1 || true
-          else
-            echo "Pages already configured. Ensuring source = gh-pages..."
-            gh api repos/${GITHUB_REPOSITORY}/pages \
-              --method PUT \
-              -f "source[branch]=gh-pages" \
-              -f "source[path]=/" \
-              2>&1 || true
-          fi
+          printf '{"source":{"branch":"gh-pages","path":"/"}}' > /tmp/pages.json
+          echo "Pages payload:"
+          cat /tmp/pages.json
+          echo ""
+          echo "Current Pages info:"
+          gh api repos/${GITHUB_REPOSITORY}/pages 2>/dev/null || echo "(not yet configured)"
+          echo "Sending POST to create Pages config..."
+          gh api repos/${GITHUB_REPOSITORY}/pages \
+            --method POST --input /tmp/pages.json 2>&1 || true
+          echo "Sending PUT to update Pages config..."
+          gh api repos/${GITHUB_REPOSITORY}/pages \
+            --method PUT --input /tmp/pages.json 2>&1 || true
+          echo "Done."
 
-      - name: Snapshot main into staging dir
+      - name: Build site snapshot
         run: |
           mkdir -p /tmp/site
           rsync -a --exclude='.git' . /tmp/site/
           touch /tmp/site/.nojekyll
 
-      - name: Validate required files in snapshot
+      - name: Validate snapshot
         run: |
-          PASS=true
-          for f in index.html manifest.json sw.js css/main.css css/reader.css \
-                   js/app.js js/db.js js/library.js js/reader.js \
-                   js/tts.js js/translation.js js/plugins.js; do
-            if [ -f "/tmp/site/${f}" ]; then
-              echo "  OK  ${f}"
+          ERRORS=0
+          for F in index.html manifest.json sw.js css/main.css css/reader.css \
+                   js/i18n.js js/db.js js/settings.js js/scraper.js js/utils.js \
+                   js/plugins.js js/tts.js js/translation.js js/backup.js \
+                   js/epub.js js/reader.js js/manga.js js/library.js js/catalog.js \
+                   js/search.js js/extensions.js js/migration.js js/minigames.js \
+                   js/app.js; do
+            if [ -f "/tmp/site/${F}" ]; then
+              echo "  PASS  ${F} ($(wc -c < /tmp/site/${F}) bytes)"
             else
-              echo "  MISSING: ${f}"
-              PASS=false
+              echo "  FAIL  ${F} - MISSING"
+              ERRORS=$((ERRORS+1))
             fi
           done
-          JS_COUNT=$(ls /tmp/site/js/*.js 2>/dev/null | wc -l)
-          echo "Total JS files: ${JS_COUNT}"
-          if [ "${PASS}" = "false" ]; then
-            echo "Validation failed!"
-            exit 1
-          fi
-          echo "All required files present. index.html size: $(wc -c < /tmp/site/index.html) bytes"
+          echo "Validation: ${ERRORS} errors"
+          if [ ${ERRORS} -gt 0 ]; then exit 1; fi
+          echo "All files OK. Total JS: $(ls /tmp/site/js/*.js | wc -l)"
 
-      - name: Publish snapshot to gh-pages branch
+      - name: Deploy to gh-pages branch
         run: |
           git fetch origin
           if git ls-remote --exit-code --heads origin gh-pages > /dev/null 2>&1; then
             git checkout -b gh-pages origin/gh-pages
-            echo "Checked out existing gh-pages branch"
+            echo "Using existing gh-pages branch"
           else
             git checkout --orphan gh-pages
             git rm -rf . 2>/dev/null || true
-            echo "Created new orphan gh-pages branch"
+            echo "Created new gh-pages branch"
           fi
           rsync -a --delete /tmp/site/ .
           git add -A
-          echo "Git status:"
-          git status --short | head -20
+          git status --short | head -30
           if git diff --staged --quiet; then
-            echo "No changes to deploy"
+            echo "No changes - gh-pages already up to date"
           else
-            SHORTSHA=$(git rev-parse --short origin/main 2>/dev/null || date -u +%Y%m%d%H%M)
-            git commit -m "deploy: ${SHORTSHA}"
+            SHA=$(git rev-parse --short origin/main 2>/dev/null || date -u +%H%M%S)
+            git commit -m "deploy: ${SHA}"
             git push origin gh-pages --force
-            echo "Successfully deployed to gh-pages!"
+            echo "Deployed to gh-pages!"
           fi
 
-      - name: Verify deployment
+      - name: Show result
         run: |
-          sleep 3
-          INFO=$(gh api repos/${GITHUB_REPOSITORY}/pages 2>/dev/null || echo "{}")
-          echo "Pages info: ${INFO}"
-          OWNER_LC=$(echo "${GITHUB_REPOSITORY}" | cut -d'/' -f1 | tr '[:upper:]' '[:lower:]')
-          REPO_LC=$(echo "${GITHUB_REPOSITORY}" | cut -d'/' -f2 | tr '[:upper:]' '[:lower:]')
-          echo "============================="
-          echo "Repo: https://github.com/${GITHUB_REPOSITORY}"
-          echo "Live URL: https://${OWNER_LC}.github.io/${REPO_LC}/"
-          echo "============================="
+          OWNER=$(echo "${GITHUB_REPOSITORY}" | cut -d'/' -f1 | tr '[:upper:]' '[:lower:]')
+          REPO=$(echo "${GITHUB_REPOSITORY}" | cut -d'/' -f2 | tr '[:upper:]' '[:lower:]')
+          echo "Pages info after deploy:"
+          gh api repos/${GITHUB_REPOSITORY}/pages 2>/dev/null | grep -E '(url|status|source)' || true
+          echo "Site should be live at: https://${OWNER}.github.io/${REPO}/"

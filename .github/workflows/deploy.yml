@@ -24,40 +24,53 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Enable or update GitHub Pages (gh-pages branch source)
-        run: |
-          PAYLOAD='{"source":{"branch":"gh-pages","path":"/"}}'
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/pages")
-          echo "Current Pages API response: HTTP $STATUS"
-          if [ "$STATUS" = "404" ]; then
-            echo "Pages not enabled yet. Creating now..."
-            RESULT=$(curl -s -w "\n%{http_code}" -X POST \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/pages" \
-              -d "$PAYLOAD")
-            echo "Create result: $RESULT"
-          else
-            echo "Pages exists. Ensuring source is gh-pages branch..."
-            curl -s -X PUT \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/pages" \
-              -d "$PAYLOAD" || true
-          fi
+      - name: Enable or update GitHub Pages source
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          API="https://api.github.com/repos/${GITHUB_REPOSITORY}/pages"
+          PAYLOAD='{"source":{"branch":"gh-pages","path":"/"}}'
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "${API}")
+          echo "Pages API status: HTTP ${STATUS}"
+          if [ "${STATUS}" = "404" ]; then
+            echo "Pages not enabled. Creating from gh-pages branch..."
+            curl -s -X POST \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "${API}" -d "${PAYLOAD}"
+            echo ""
+          else
+            echo "Pages exists (HTTP ${STATUS}). Ensuring source = gh-pages branch..."
+            curl -s -X PUT \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "${API}" -d "${PAYLOAD}" || true
+          fi
 
-      - name: Snapshot main into /tmp/site
+      - name: Snapshot main into staging dir
         run: |
           mkdir -p /tmp/site
           rsync -a --exclude='.git' . /tmp/site/
           touch /tmp/site/.nojekyll
-          echo "Files in snapshot:"
-          ls /tmp/site
+          echo "Snapshot root:"
+          ls -la /tmp/site
+          echo "JS files:"
+          ls /tmp/site/js/
+          echo "CSS files:"
+          ls /tmp/site/css/
+
+      - name: Validate index.html exists
+        run: |
+          if [ ! -f /tmp/site/index.html ]; then
+            echo "ERROR: index.html missing from snapshot!"
+            exit 1
+          fi
+          echo "OK: index.html present ($(wc -c < /tmp/site/index.html) bytes)"
+          echo "OK: $(ls /tmp/site/js/*.js | wc -l) JS files"
+          echo "OK: $(ls /tmp/site/css/*.css | wc -l) CSS files"
 
       - name: Publish snapshot to gh-pages branch
         run: |
@@ -76,13 +89,13 @@ jobs:
             SHORTSHA=$(git rev-parse --short origin/main 2>/dev/null || date -u +%Y%m%d%H%M)
             git commit -m "deploy: ${SHORTSHA}"
             git push origin gh-pages --force
-            echo "Successfully pushed to gh-pages"
+            echo "Successfully deployed to gh-pages!"
           fi
 
-      - name: Show live URL
+      - name: Print live URL
         run: |
-          OWNER=$(echo "$GITHUB_REPOSITORY" | cut -d'/' -f1 | tr '[:upper:]' '[:lower:]')
-          REPO=$(echo "$GITHUB_REPOSITORY" | cut -d'/' -f2 | tr '[:upper:]' '[:lower:]')
-          echo "=============================="
-          echo "Site URL: https://${OWNER}.github.io/${REPO}/"
-          echo "=============================="
+          OWNER=$(echo "${GITHUB_REPOSITORY}" | cut -d'/' -f1 | tr '[:upper:]' '[:lower:]')
+          REPO=$(echo "${GITHUB_REPOSITORY}" | cut -d'/' -f2 | tr '[:upper:]' '[:lower:]')
+          echo "============================="
+          echo "Live: https://${OWNER}.github.io/${REPO}/"
+          echo "============================="

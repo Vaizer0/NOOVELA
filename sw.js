@@ -1,5 +1,5 @@
 'use strict';
-const CACHE_NAME='novela-v1';
+const CACHE_NAME='novela-v2';
 const PRECACHE=[
   './',
   './index.html',
@@ -10,6 +10,7 @@ const PRECACHE=[
   './js/reader.js','./js/manga.js','./js/library.js','./js/catalog.js','./js/search.js',
   './js/extensions.js','./js/migration.js','./js/minigames.js','./js/app.js',
   './assets/icon.svg',
+  './manifest.json',
 ];
 self.addEventListener('install',event=>{
   event.waitUntil(

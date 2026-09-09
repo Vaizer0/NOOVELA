@@ -2,7 +2,7 @@
 let _rdrBook=null,_rdrChapters=[],_rdrIdx=0;
 async function openReader(book,chapterUrl,chapters){
   _rdrBook=book;_rdrChapters=chapters||[];
-  _rdrIdx=_rdrChapters.findIndex(c=>c.url===chapterUrl);
+  _rdrIdx=_rdrChapters.findIndex(c=>(c.url||c.path)===chapterUrl);
   if(_rdrIdx<0)_rdrIdx=0;
   TTS.stop();
   App.showScreen('reader');showLoading('Loading...');
@@ -11,7 +11,7 @@ async function openReader(book,chapterUrl,chapters){
     if(!content){content=await _rdrFetch(chapterUrl,book);if(content)await DB.saveChapterContent(chapterUrl,content);}
     content=content||'(No content available)';
     const ch=_rdrChapters[_rdrIdx]||{};
-    await DB.addHistory({bookId:book.id,bookTitle:book.title,chapterUrl,chapterTitle:ch.title||'',coverUrl:book.coverUrl||'',readAt:Date.now()});
+    await DB.addHistory({bookId:book.id,bookTitle:book.title||book.name||'',chapterUrl,chapterTitle:ch.title||ch.name||'',coverUrl:book.coverUrl||'',readAt:Date.now()});
     const prog=(await DB.getProgress(book.id))||{};
     prog.lastChapterUrl=chapterUrl;prog.lastReadAt=Date.now();
     await DB.saveProgress(book.id,prog);
@@ -21,20 +21,45 @@ async function openReader(book,chapterUrl,chapters){
   finally{hideLoading();}
 }
 async function _rdrFetch(url,book){
-  const plugin=book&&book.sourceId?Plugins.getPlugin(book.sourceId):null;
-  if(plugin&&plugin.mod&&plugin.mod.fetchChapter){try{return await plugin.mod.fetchChapter(url);}catch(e){console.warn('Plugin fetchChapter failed:',e);}}
-  const dom=await Scraper.fetchDom(url);
-  return dom?Scraper.extractText(dom):'';
+  // Try plugin first (handles both lnreader and legacy plugins via unified API)
+  if(book&&book.sourceId){
+    try{
+      const content=await Plugins.getChapterContent(book.sourceId,url);
+      if(content&&content.length>20)return content;
+    }catch(e){console.warn('Plugin getChapterContent failed:',e.message);}
+  }
+  // Fallback: scrape the page directly
+  try{
+    const dom=await Scraper.fetchDom(url);
+    return dom?Scraper.extractText(dom):'';
+  }catch(e){console.warn('Scraper fallback failed:',e.message);return '';}
 }
 function _renderReaderContent(text){
   const container=document.getElementById('reader-content');
   if(!container)return;
   container.innerHTML='';
+  // Apply regex rules from settings
   const rules=(typeof Settings!=='undefined'?Settings.get('regexRules'):null)||[];
-  for(const rule of rules){try{text=text.replace(new RegExp(rule.regex,rule.flags||'g'),rule.replacement);}catch(_){}}
-  const paras=text.split('\n\n').filter(p=>p.trim());
-  if(!paras.length)paras.push(text.trim());
-  paras.forEach(p=>{const div=document.createElement('div');div.className='reader-para';div.textContent=p.trim();container.appendChild(div);});
+  for(const rule of rules){
+    try{text=text.replace(new RegExp(rule.regex,rule.flags||'g'),rule.replacement);}catch(_){}
+  }
+  // If content looks like HTML, extract text; otherwise split paragraphs
+  let paras;
+  if(text&&text.trim().startsWith('<')){
+    const doc=new DOMParser().parseFromString(text,'text/html');
+    doc.querySelectorAll('script,style,nav,header,footer,aside').forEach(e=>e.remove());
+    const plain=(doc.body.innerText||doc.body.textContent||'').replace(/\n{3,}/g,'\n\n').trim();
+    paras=plain.split('\n\n').filter(p=>p.trim());
+  }else{
+    paras=(text||'').split('\n\n').filter(p=>p.trim());
+  }
+  if(!paras.length)paras=[text.trim()];
+  paras.forEach(p=>{
+    const div=document.createElement('div');
+    div.className='reader-para';
+    div.textContent=p.trim();
+    container.appendChild(div);
+  });
   TTS.prepareContainer(container);
 }
 function _applyReaderSettings(){
@@ -52,12 +77,12 @@ function _rdrUpdateNav(){
 }
 function _rdrUpdateTitle(){
   const el=document.getElementById('reader-chapter-title'),ch=_rdrChapters[_rdrIdx];
-  if(el)el.textContent=ch?ch.title:(_rdrBook?_rdrBook.title:'');
+  if(el)el.textContent=ch?(ch.title||ch.name||''):(_rdrBook?(_rdrBook.title||_rdrBook.name||''):'');
 }
 function readerNavChapter(dir){
   const idx=_rdrIdx+dir;
   if(idx<0||idx>=_rdrChapters.length){showToast('No more chapters','info');return;}
-  openReader(_rdrBook,_rdrChapters[idx].url,_rdrChapters);
+  openReader(_rdrBook,(_rdrChapters[idx].url||_rdrChapters[idx].path),_rdrChapters);
 }
 async function readerTranslate(){
   const container=document.getElementById('reader-content');if(!container)return;

@@ -7,7 +7,8 @@ const App={
     this.currentScreen=name;
     document.querySelectorAll('.nav-item').forEach(item=>item.classList.toggle('active',item.dataset.screen===name));
     if(name==='history')renderHistory();
-    else if(name==='extensions')Ext.renderExtensions();
+    // FIX: must call initExtensions (not renderExtensions) so the index is fetched on first open
+    else if(name==='extensions')Ext.initExtensions();
     else if(name==='migration')Migration.initMigration();
     else if(name==='settings'&&Settings.renderSettings)Settings.renderSettings();
     else if(name==='finder')Catalog.openFinder();

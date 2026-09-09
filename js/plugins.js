@@ -1,5 +1,5 @@
 'use strict';
-const EXT_INDEX_URL='https://raw.githubusercontent.com/HnDK0/external-sources/refs/heads/main/index.yaml';
+const DEFAULT_INDEX_URL='https://raw.githubusercontent.com/HnDK0/external-sources/refs/heads/main/index.yaml';
 const _store={};
 const PluginManager={
   async loadFromDB(){try{const exts=await DB.getAllExtensions();for(const e of exts)this._compile(e);}catch(e){console.error('PluginManager.loadFromDB:',e);}},
@@ -14,35 +14,88 @@ const PluginManager={
     _store[ext.id]=ext;
   },
   _makeAPI(ext){
-    return{fetch:(u,o)=>Scraper.fetchProxy(u,o),fetchText:(u,o)=>Scraper.fetchText(u,o),fetchJson:(u,o)=>Scraper.fetchJson(u,o),parseHtml:html=>new DOMParser().parseFromString(html,'text/html'),absoluteUrl:(base,rel)=>{try{return new URL(rel,base).href;}catch(_){return rel;}},extractText:el=>el?el.textContent||'':'',log:(...a)=>console.log('['+ext.id+']',...a),error:(...a)=>console.error('['+ext.id+']',...a)};
+    return{
+      fetch:(u,o)=>Scraper.fetchProxy(u,o),
+      fetchText:(u,o)=>Scraper.fetchText(u,o),
+      fetchJson:(u,o)=>Scraper.fetchJson(u,o),
+      parseHtml:html=>new DOMParser().parseFromString(html,'text/html'),
+      absoluteUrl:(base,rel)=>{try{return new URL(rel,base).href;}catch(_){return rel;}},
+      extractText:(el,sel)=>{
+        if(typeof el==='string')el=new DOMParser().parseFromString(el,'text/html').body;
+        if(sel)el=el.querySelector(sel);
+        return el?el.textContent||'':'';
+      },
+      querySelectorAll:(el,sel)=>Array.from((typeof el==='string'?new DOMParser().parseFromString(el,'text/html').body:el).querySelectorAll(sel)),
+      querySelector:(el,sel)=>(typeof el==='string'?new DOMParser().parseFromString(el,'text/html').body:el).querySelector(sel),
+      attr:(el,a)=>el?el.getAttribute(a):null,
+      text:(el)=>el?el.textContent.trim():'',
+      log:(...a)=>console.log('['+ext.id+']',...a),
+      error:(...a)=>console.error('['+ext.id+']',...a),
+      PROXIES:['https://api.allorigins.win/raw?url=','https://corsproxy.io/?','https://thingproxy.freeboard.io/fetch/','https://api.codetabs.com/v1/proxy/?quest='],
+    };
   },
   getAll(){return Object.values(_store);},
   getPlugin(id){return _store[id]||null;},
   async install(ext){this._compile(ext);await DB.saveExtension(ext);},
   async uninstall(id){delete _store[id];await DB.deleteExtension(id);},
   async installFromUrl(url){
-    const code=await Scraper.fetchText(url);if(!code)throw new Error('Cannot fetch '+url);
-    const meta=this._extractMeta(code,url);const ext=Object.assign({},meta,{code,sourceUrl:url});
-    await this.install(ext);showToast('Installed: '+ext.name,'success');return ext;
+    showLoading('Fetching extension...');
+    try{
+      const code=await Scraper.fetchText(url);
+      if(!code||!code.trim())throw new Error('Empty response from: '+url);
+      const meta=this._extractMeta(code,url);
+      const ext=Object.assign({},meta,{code,sourceUrl:url,installedAt:Date.now()});
+      await this.install(ext);
+      return ext;
+    }finally{hideLoading();}
   },
   _extractMeta(code,url){
     let name='',lang='',version='',id='',description='';
     const lines=code.split('\n');
-    for(const line of lines){const t=line.trim();if(t.startsWith('// @name '))name=t.slice(9).trim();else if(t.startsWith('// @lang '))lang=t.slice(9).trim();else if(t.startsWith('// @version '))version=t.slice(12).trim();else if(t.startsWith('// @id '))id=t.slice(7).trim();else if(t.startsWith('// @description '))description=t.slice(16).trim();}
-    if(!id){const p=url.split('/');id=p[p.length-1].replace('.js','');}if(!name)name=id;
+    for(const line of lines){
+      const t=line.trim();
+      if(t.startsWith('// @name '))name=t.slice(9).trim();
+      else if(t.startsWith('// @lang '))lang=t.slice(9).trim();
+      else if(t.startsWith('// @version '))version=t.slice(12).trim();
+      else if(t.startsWith('// @id '))id=t.slice(7).trim();
+      else if(t.startsWith('// @description '))description=t.slice(16).trim();
+    }
+    if(!id){const p=url.split('/');id=p[p.length-1].replace('.js','');}
+    if(!name)name=id;
     return{id,name,lang,version,description};
   },
-  async fetchIndex(){try{const yaml=await Scraper.fetchText(EXT_INDEX_URL);return this._parseYaml(yaml);}catch(e){console.error('fetchIndex:',e);return[];}},
+  async fetchIndex(url){
+    url=url||DEFAULT_INDEX_URL;
+    try{
+      const yaml=await Scraper.fetchText(url);
+      if(!yaml)throw new Error('Empty index response');
+      return this._parseYaml(yaml);
+    }catch(e){
+      console.error('fetchIndex:',url,e);
+      throw e;
+    }
+  },
   _parseYaml(yaml){
     const items=[];let cur=null;
     for(const rawLine of yaml.split('\n')){
       const line=rawLine.replace(/[\r]+$/,'');
-      if(line.startsWith('- '))cur={};
+      if(line.startsWith('- ')||line.trim().startsWith('- '))cur={};
       if(!cur)continue;
       const t=line.trim();
-      if(t.startsWith('name: '))cur.name=t.slice(6).trim();else if(t.startsWith('id: '))cur.id=t.slice(4).trim();else if(t.startsWith('lang: '))cur.lang=t.slice(6).trim();else if(t.startsWith('version: '))cur.version=t.slice(9).trim();else if(t.startsWith('sourceUrl: '))cur.sourceUrl=t.slice(11).trim();else if(t.startsWith('url: '))cur.sourceUrl=t.slice(5).trim();
-      if(cur&&cur.id&&cur.sourceUrl){items.push(Object.assign({},cur));cur=null;}
+      if(t.startsWith('name: '))cur.name=t.slice(6).replace(/^[\'\"]/,'').replace(/[\'\"]+$/,'').trim();
+      else if(t.startsWith('id: '))cur.id=t.slice(4).trim();
+      else if(t.startsWith('lang: '))cur.lang=t.slice(6).trim();
+      else if(t.startsWith('version: '))cur.version=String(t.slice(9).trim());
+      else if(t.startsWith('description: '))cur.description=t.slice(13).trim();
+      else if(t.startsWith('sourceUrl: '))cur.sourceUrl=t.slice(11).trim();
+      else if(t.startsWith('url: ')&&!cur.sourceUrl)cur.sourceUrl=t.slice(5).trim();
+      // Flush when we have enough
+      if(cur&&cur.id&&cur.sourceUrl&&(t.startsWith('sourceUrl:')||t.startsWith('url:'))){
+        items.push(Object.assign({},cur));cur=null;
+      }
     }
+    // Flush last item if not yet added
+    if(cur&&cur.id&&cur.sourceUrl)items.push(cur);
     return items;
   },
   async callPlugin(id,method,...args){

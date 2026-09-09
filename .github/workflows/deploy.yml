@@ -1,26 +1,83 @@
-name: Deploy to GitHub Pages
+name: Deploy NoveLA to GitHub Pages
 on:
   push:
     branches: [main]
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 concurrency:
-  group: pages
-  cancel-in-progress: true
+  group: deploy
+  cancel-in-progress: false
 jobs:
   deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v4
-      - uses: actions/upload-pages-artifact@v3
+      - name: Checkout main
+        uses: actions/checkout@v4
         with:
-          path: '.'
-      - uses: actions/deploy-pages@v4
-        id: deployment
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Enable / update GitHub Pages source
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/pages")
+          echo "Pages API status: $STATUS"
+          if [ "$STATUS" = "404" ]; then
+            echo "Creating Pages config (gh-pages branch)..."
+            curl -s -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/pages" \
+              -d '{"source":{"branch":"gh-pages","path":"/'"'"'/'"'"'"}}'
+          else
+            echo "Updating Pages config to gh-pages branch..."
+            curl -s -X PUT \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/pages" \
+              -d '{"source":{"branch":"gh-pages","path":"/'"'"'/'"'"'"}}' || true
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build site snapshot
+        run: |
+          mkdir -p /tmp/site
+          rsync -av --exclude='.git' . /tmp/site/
+          touch /tmp/site/.nojekyll
+
+      - name: Push snapshot to gh-pages
+        run: |
+          git fetch origin
+          if git show-ref --quiet refs/remotes/origin/gh-pages; then
+            git checkout -b gh-pages origin/gh-pages
+          else
+            git checkout --orphan gh-pages
+            git rm -rf . 2>/dev/null || true
+          fi
+          rsync -av --delete /tmp/site/ .
+          git add -A
+          if git diff --staged --quiet; then
+            echo "Nothing changed — skipping commit"
+          else
+            SHORT=$(git rev-parse --short origin/main 2>/dev/null || echo "$(date -u +%Y%m%d%H%M)")
+            git commit -m "deploy: $SHORT"
+            git push origin gh-pages --force
+            echo "Deployed to gh-pages successfully"
+          fi
+
+      - name: Report live URL
+        run: |
+          REPO_LC=$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          OWNER=$(echo "$REPO_LC" | cut -d'/' -f1)
+          REPO=$(echo "$REPO_LC" | cut -d'/' -f2)
+          echo "Live URL: https://${OWNER}.github.io/${REPO}/"

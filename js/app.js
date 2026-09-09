@@ -7,7 +7,7 @@ const App={
     this.currentScreen=name;
     document.querySelectorAll('.nav-item').forEach(item=>item.classList.toggle('active',item.dataset.screen===name));
     if(name==='history')renderHistory();
-    else if(name==='extensions')Ext.renderExtensions();
+    else if(name==='extensions')Ext.initExtensions();
     else if(name==='migration')Migration.initMigration();
     else if(name==='settings'&&Settings.renderSettings)Settings.renderSettings();
     else if(name==='finder')Catalog.openFinder();
@@ -27,9 +27,7 @@ async function boot(){
     if(canvas&&typeof MiniGames!=='undefined')MiniGames.init(canvas);
   }catch(e){console.error('Boot error:',e);}
   window.addEventListener('hashchange',()=>_handleHash());
-  document.querySelectorAll('.nav-item').forEach(item=>{
-    item.addEventListener('click',()=>{const s=item.dataset.screen;if(s){App.showScreen(s);window.location.hash='#'+s;}});
-  });
+  document.querySelectorAll('.nav-item').forEach(item=>{item.addEventListener('click',()=>{const s=item.dataset.screen;if(s){App.showScreen(s);window.location.hash='#'+s;}});});
   document.querySelectorAll('[data-action]').forEach(el=>el.addEventListener('click',()=>_handleAction(el.dataset.action,el)));
   document.querySelectorAll('[data-filter]').forEach(el=>el.addEventListener('click',()=>Library.libSetFilter&&Library.libSetFilter(el.dataset.filter)));
   document.querySelectorAll('[data-sort]').forEach(el=>el.addEventListener('click',()=>Library.libSetSort&&Library.libSetSort(el.dataset.sort)));
@@ -42,11 +40,7 @@ async function boot(){
   _handleHash();
   if(typeof Backup!=='undefined')Backup.scheduleAutoBackup();
 }
-function _handleHash(){
-  const hash=window.location.hash.slice(1)||'library';
-  const screen=hash.split('/')[0];
-  App.showScreen(SCREENS.includes(screen)?screen:'library');
-}
+function _handleHash(){const hash=window.location.hash.slice(1)||'library';const screen=hash.split('/')[0];App.showScreen(SCREENS.includes(screen)?screen:'library');}
 function _handleAction(action,el){
   const R=()=>typeof Reader!=='undefined'?Reader:{};
   const M=()=>typeof Manga!=='undefined'?Manga:{};
@@ -81,10 +75,7 @@ async function renderHistory(){
   const container=document.getElementById('history-list');if(!container)return;
   const items=await DB.getHistory(60);
   container.innerHTML='';
-  if(!items.length){
-    const e=document.createElement('div');e.className='empty-state';
-    const p=document.createElement('p');p.textContent='No reading history yet.';e.appendChild(p);container.appendChild(e);return;
-  }
+  if(!items.length){const e=document.createElement('div');e.className='empty-state';const p=document.createElement('p');p.textContent='No reading history yet.';e.appendChild(p);container.appendChild(e);return;}
   items.forEach(item=>{
     const div=document.createElement('div');div.className='history-item';
     const cov=document.createElement('div');cov.className='history-cover';
@@ -95,10 +86,7 @@ async function renderHistory(){
     const ch=document.createElement('div');ch.className='history-chapter';ch.textContent=truncate(item.chapterTitle||'',60);
     const time=document.createElement('div');time.className='history-time';time.textContent=formatRelTime(item.readAt);
     info.appendChild(t);info.appendChild(ch);info.appendChild(time);div.appendChild(cov);div.appendChild(info);
-    div.addEventListener('click',async()=>{
-      const book=item.bookId?await DB.getBook(item.bookId).catch(()=>null):null;
-      if(book){const chs=await DB.getBookChapters(book.id)||[];openReader(book,item.chapterUrl,chs);}
-    });
+    div.addEventListener('click',async()=>{const book=item.bookId?await DB.getBook(item.bookId).catch(()=>null):null;if(book){const chs=await DB.getBookChapters(book.id)||[];openReader(book,item.chapterUrl,chs);}});
     container.appendChild(div);
   });
   lazyLoad(container);
